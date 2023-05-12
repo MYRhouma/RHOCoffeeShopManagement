@@ -1,5 +1,9 @@
-from django.db import models
 from django.contrib.auth.models import User, AbstractUser
+from django.db import models
+import qrcode
+from django.db.models.signals import pre_save, post_save
+from django.dispatch import receiver
+import os
 
 
 ACCOUNT_TYPES=(
@@ -37,15 +41,19 @@ class Business(models.Model):
     description = models.TextField()
     country = models.CharField(max_length=30,choices=COUNTRIES)
     address = models.TextField(max_length=255)
-    logo = models.ImageField(upload_to='logos/', null=True, blank=True)
+    logo = models.ImageField(upload_to='media/logos/', null=True, blank=True)
+    active = models.BooleanField(default=False)
     added_at = models.DateTimeField(auto_now_add=True)
     def __str__(self):
         return self.name
+    class Meta:
+        verbose_name_plural = "Businesses"
+
 
 class Account(AbstractUser):
-    type = models.IntegerField(choices=ACCOUNT_TYPES)
+    type = models.IntegerField(choices=ACCOUNT_TYPES, default=1)
     business = models.ForeignKey(Business,on_delete=models.CASCADE,null=True)
-    phone_number = models.CharField(max_length=20)
+    phone_number = models.CharField(max_length=20,null=True,blank=True)
 
 class Menu(models.Model):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
@@ -62,6 +70,9 @@ class Category(models.Model):
 
     def __str__(self):
         return self.name
+
+    class Meta:
+        verbose_name_plural = "Categories"
 
 class Product(models.Model):
     category = models.ForeignKey(Category, on_delete=models.CASCADE)
@@ -80,10 +91,41 @@ class Customer(models.Model):
         return self.email
 
 
+# Create your models here.
+def table_qr_upload_path(instance, filename):
+    return f'media/table/{instance.business.id}/qrCodes/{filename}'
+class Table(models.Model):
+    business = models.ForeignKey(Business, on_delete=models.CASCADE)
+    table_number = models.IntegerField(unique=True)
+    table_QR_Code = models.ImageField(upload_to=table_qr_upload_path,blank=True,null=True)
+    busy = models.BooleanField(default=False)
+    reserved= models.BooleanField(default=False)
+    def __str__(self):
+        return "Table "+str(self.table_number)
+@receiver(pre_save, sender=Table)
+def table_QR_Generation(sender, instance, *args, **kwargs):
+    # Génère le code QR avec la bibliothèque qrcode
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_L,
+        box_size=10,
+        border=2,
+    )
+    # qr.add_data("https://"+ALLOWED_HOSTS[0]+'/'+str(instance.table_number))
+    qr.add_data(instance.table_number)
+    qr.make(fit=True)
+
+    # Enregistre l'image du code QR dans un fichier
+    filename = "table/{}/qrCodes/table{}.png".format(instance.business.id,instance.table_number)
+    img = qr.make_image(fill_color="black", back_color="white")
+    img.save('media/'+filename)
+    instance.table_QR_Code = filename
+
 
 class Order(models.Model):
     business = models.ForeignKey(Business, on_delete=models.CASCADE)
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL,null=True,blank=True)
+    table = models.ForeignKey(Table, on_delete=models.SET_NULL,null=True,blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     status = models.IntegerField(choices=STATUS_CHOICES, default=0)
